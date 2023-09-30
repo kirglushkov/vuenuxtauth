@@ -12,13 +12,46 @@ import { NuxtAuthHandler } from '#auth'
 
 const prisma = new PrismaClient()
 
-async function fetchRefreshedToken (refreshToken) {
-  // Implement your logic here to make the API call and get a new access token using the refresh token
-
-  // Return the refreshed token
-  return {
-    access_token: 'new-access-token',
-    expires_in: 3600 // Expiry time in seconds
+async function refreshAccessToken (refreshToken: {
+  accessToken: string;
+  accessTokenExpires: string;
+  refreshToken: string;
+}) {
+  try {
+    console.warn('trying to post to refresh token')
+    const refreshedTokens = await $fetch<{
+      data: {
+        access_token: string;
+        expires: number;
+        refresh_token: string;
+      };
+    } | null>('https://domain.directus.app/auth/refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: {
+        refresh_token: refreshToken.refreshToken,
+        mode: 'json'
+      }
+    })
+    if (!refreshedTokens || !refreshedTokens.data) {
+      console.warn('No refreshed tokens')
+      throw refreshedTokens
+    }
+    console.warn('Refreshed tokens successfully')
+    return {
+      ...refreshToken,
+      accessToken: refreshedTokens.data.access_token,
+      accessTokenExpires: Date.now() + refreshedTokens.data.expires,
+      refreshToken: refreshedTokens.data.refresh_token
+    }
+  } catch (error) {
+    console.warn('Error refreshing token', error)
+    return {
+      ...refreshToken,
+      error: 'RefreshAccessTokenError'
+    }
   }
 }
 
@@ -87,5 +120,30 @@ export default NuxtAuthHandler({
   },
   session: {
     strategy: 'jwt'
+  },
+
+  callbacks: {
+    async jwt ({ token, user, account }) {
+      if (account && user) {
+        console.warn('JWT callback', { token, user, account })
+        return {
+          ...token,
+          ...user
+        }
+      }
+      // Handle token refresh before it expires of 15 minutes
+      if (token.accessTokenExpires && Date.now() > token.accessTokenExpires) {
+        console.warn('Token is expired. Getting a new')
+        return await refreshAccessToken(token)
+      }
+      return token
+    },
+    async session ({ session, token }) {
+      session.user = {
+        ...session.user,
+        ...token
+      }
+      return session
+    }
   }
 })
